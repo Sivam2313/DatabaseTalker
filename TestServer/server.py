@@ -1,6 +1,7 @@
+
 from flask import Flask, request, jsonify
-import psycopg2
-import psycopg2.extras
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from pymongo import MongoClient
 from bson.json_util import dumps
@@ -14,36 +15,36 @@ load_dotenv()
 app = Flask(__name__)
 
 # Database connection settings
-DB_CONFIG = {
-    "dbname": "postgres",
-    "user": "postgres",
-    "password": "new_password",
-    "host": "localhost",
-    "port": 5432
-}
+# DB_CONFIG = {
+#     "dbname": "postgres",
+#     "user": "postgres",
+#     "password": "new_password",
+#     "host": "localhost",
+#     "port": 5432
+# }
 
-def get_db_connection():
-    return psycopg2.connect(**DB_CONFIG)
+DB_URL = "postgresql+psycopg2://postgres:new_password@localhost:5432/postgres"
+engine = create_engine(DB_URL)
 
 @app.route('/execute_sql', methods=['POST'])
 def execute_sql():
     data = request.get_json()
-    query = data.get("query")
+    query = data.get('query')
 
-    # Safety: only allow SELECT queries (for now)
-    if not query.lower().strip().startswith("select"):
-        return jsonify({"error": "Only SELECT queries are allowed."}), 403
+    if not query:
+        return jsonify({"error": "Missing SQL query"}), 400
 
     try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(query)
-        result = cur.fetchall()
-        cur.close()
-        conn.close()
-        return jsonify(result)
-    except Exception as e:
+        with engine.begin() as conn:  # transaction auto-commit
+            result = conn.execute(text(query))
+            if result.returns_rows:
+                rows = [dict(row) for row in result.mappings().all()]
+                return jsonify({"result": rows})
+            else:
+                return jsonify({"message": "Query executed successfully"})
+    except SQLAlchemyError as e:
         return jsonify({"error": str(e)}), 500
+
     
 
 # MongoDB connection
@@ -94,7 +95,6 @@ def mongo_query():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(debug=True)
