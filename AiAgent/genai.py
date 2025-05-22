@@ -13,18 +13,19 @@ import os
 
 load_dotenv()
 
+# MODEL_ID = "gemini-2.0-flash"
 MODEL_ID = "gemini-2.0-flash"
 LOCATION = "us-central1"
 
 sql_query_function = FunctionDeclaration(
     name="sql_query",
-    description="Get information from data in postgres using SQL queries",
+    description="Get or modify information from data in postgres using postgres SQL queries",
     parameters={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "SQL query using fully qualified table names.",
+                "description": "Any kind of postgres SQL query using fully qualified table names to get or modify data.",
             }
         },
         "required": ["query"],
@@ -46,11 +47,50 @@ mongo_query_function = FunctionDeclaration(
     },
 )
 
+load_data_function = FunctionDeclaration(
+    name="load_data",
+    description="Load data into postgres using SQL queries",
+    parameters={
+        "type": "object",
+        "properties": {
+            "data": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                },
+                "description": "Data to be loaded into the database.",
+            },
+        },
+        "required": ["data"],
+    },
+)
+
+create_table_function = FunctionDeclaration(
+    name="create_table",
+    description="Create a table in postgres using SQL queries",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Any kind of postgres SQL query using fully qualified table names to get or modify data.",
+            }
+        },
+        "required": ["query"],
+    },
+)
+
 
 sql_query_tool = Tool(
     function_declarations=[
         sql_query_function,
         mongo_query_function
+        # create_table_function,
+        # load_data_function
     ],
 )
 
@@ -70,7 +110,7 @@ st.subheader("Database query")
 with st.expander("Sample prompts", expanded=True):
     st.write(
         """
-        - What kind of information is in this database?
+        - Get all customers from customer table in postgres. and give me all those customers with the same id from mongodb and create a postgres table for storing the data.
         - Get all customers from customer table in postgres.
         - Get all customers from customer table in postgres. and give me all those customers with the same id from mongodb
         - Get all customers from customer table in postgres and give me all those customers from mongodb with the same id field then Calculate the total loan where total loan = external_loans from mongodb data and loans from postgres and give me the highest total loan.
@@ -103,15 +143,17 @@ if prompt := st.chat_input("Ask me about information in the database..."):
         )
 
         prompt += """
-            Please give a concise, high-level summary followed by detail in
-            plain language about where the information in your response is
-            coming from in the database. Only use information that you learn
+            Please use the apis to accomplish the task given by the user.
+            Do not make up the table names or field names. Use the table names and field names 
+            that are in the database. If you need the schema for any table in postgres just use the apis given to you.
+            Only use information that you learn
             from the database, do not make up information.
             If you feel you need more information to do the operation tell that also.
             """
 
         try:
             response = chat.send_message(prompt)
+            print("1",response)
             response = response.candidates[0].content.parts[0]
 
             # if hasattr(response, "text"):
@@ -121,7 +163,6 @@ if prompt := st.chat_input("Ask me about information in the database..."):
             #         "role": "assistant",
             #         "content": response.text
             #     })
-            # print("1",response)
 
             api_requests_and_responses = []
             backend_details = ""
@@ -163,8 +204,21 @@ if prompt := st.chat_input("Ask me about information in the database..."):
 
                         except requests.exceptions.RequestException as e:
                             print(f"Request failed: {e}")
+                    
+                    if response.function_call.name == "create_table":
+                        url = "http://localhost:5000/create_table"
+                        payload = params
+                        try:
+                            api_response = requests.post(url, json=payload)
+                            if api_response.status_code == 200:
+                                api_requests_and_responses.append(
+                                    [response.function_call.name, params, api_response.json()]
+                                )
 
-                    # print(response.function_call.name,api_response.json())
+                        except requests.exceptions.RequestException as e:
+                            print(f"Request failed: {e}")
+
+                    print(response.function_call.name,api_response.json())
 
                     # print("1",response.function_call.name)
                     response = chat.send_message(
@@ -175,9 +229,15 @@ if prompt := st.chat_input("Ask me about information in the database..."):
                             },
                         ),
                     )
-                    response = response.candidates[0].content.parts[0]
+                    
+                    # print(response.candidates[0].content.parts[0])
+                    print(len(response.candidates[0].content.parts))
 
-                    # print(api_requests_and_responses)
+                    if(len(response.candidates[0].content.parts)>1):
+                        response = response.candidates[0].content.parts[1]
+                    else:
+                        response = response.candidates[0].content.parts[0]
+
 
                     backend_details += "- Function call:\n"
                     backend_details += (
